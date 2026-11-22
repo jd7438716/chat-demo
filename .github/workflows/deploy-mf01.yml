@@ -1,0 +1,75 @@
+name: Publish build for mf01
+
+# 目的：把 main 的构建产物发布到 `dist` 分支，供 mf01 上的 cron 拉取部署。
+#
+# 为什么是「推送产物 + 拉取部署」而不是「CI 直接 ssh 到服务器」：
+#   mf01 在 WireGuard 内网（10.13.13.4），公网无任何入站入口（22222 网关已退役），
+#   GitHub 托管 runner 连不上它；反过来 mf01 能出网，所以由 mf01 定时来拉。
+#
+# 为什么不装 self-hosted runner：本仓库是 public fork。GitHub 明确不建议 public
+#   仓库使用自托管 runner（外部 PR 有机会在你的机器上执行代码），故不采用。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # 需要向 dist 分支推送
+
+concurrency:
+  group: publish-mf01
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.6.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types
+        run: pnpm type
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      # 每次都是全新孤儿提交 + force-push：dist 分支永远只有一条提交，不堆历史
+      - name: Publish to dist branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/publish"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          cp -a dist/. "$OUT/"
+          cd "$OUT"
+          printf '%s\n' "Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA}" > .build-info
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "build: ${GITHUB_SHA:0:12}"
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            HEAD:dist
+          echo "published dist <- ${GITHUB_SHA:0:12}"
