@@ -17,6 +17,7 @@ import {
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
+import { refreshTuziModels, useGateway } from '../../services/api/gateway.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
   isChineseBrowser,
@@ -99,6 +100,7 @@ const SettingsContent = () => {
               <ThemeSetting />
               <LocaleSetting />
               <TtsVoiceSetting />
+              <TuziModelsSetting />
               <LocationSetting />
             </>
           ) : (
@@ -286,6 +288,54 @@ const LocaleSetting = () => {
           ]}
           onChange={setLocale}
         />
+      }
+    />
+  )
+}
+
+/** TuZi 模型：展示绘图 / 第三方 LLM 的加载状态，可手动刷新 */
+const TuziModelsSetting = () => {
+  const t = useTranslate()
+  const gatewayStatus = useGateway((state) => state.status)
+  const hasDrawKey = useGateway((state) => state.hasDrawKey)
+  const hasLlmKey = useGateway((state) => state.hasLlmKey)
+  const modelsStatus = useGateway((state) => state.modelsStatus)
+  const modelsError = useGateway((state) => state.modelsError)
+  const drawCount = useGateway((state) => state.drawModels.length)
+  const llmCount = useGateway((state) => state.llmModels.length)
+  const description =
+    gatewayStatus === 'client'
+      ? t('settingsDrawModelsStatic')
+      : !hasDrawKey && !hasLlmKey
+        ? t('settingsDrawModelsUnavailable')
+        : modelsStatus === 'loading'
+          ? t('settingsDrawModelsLoading')
+          : modelsStatus === 'error'
+            ? t('settingsDrawModelsFailed', { message: modelsError ?? '' })
+            : drawCount === 0 && llmCount === 0
+              ? t('settingsDrawModelsEmpty')
+              : t('settingsTuziModelsReady', { draw: drawCount, llm: llmCount }) +
+                (!hasDrawKey ? t('settingsTuziNoDrawKey') : drawCount === 0 ? t('settingsDrawModelsEmpty') : '') +
+                (!hasLlmKey
+                  ? t('settingsTuziNoLlmKey')
+                  : llmCount === 0
+                    ? t('settingsTuziModelsNoLlm')
+                    : '')
+  return (
+    <SettingCell
+      label={t('settingsTuziModels')}
+      description={description}
+      status={null}
+      action={
+        <Button
+          variant="outlined"
+          size="m"
+          className={styles.cellButton}
+          disabled={(!hasDrawKey && !hasLlmKey) || modelsStatus === 'loading'}
+          onClick={() => void refreshTuziModels(true)}
+        >
+          {t('refresh')}
+        </Button>
       }
     />
   )

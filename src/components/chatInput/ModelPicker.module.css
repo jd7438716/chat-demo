@@ -1,0 +1,22 @@
+.picker {
+  height: 34px;
+  min-width: 0;
+  max-width: 168px;
+  flex-shrink: 1;
+  padding: 0 30px 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background-color: transparent;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+
+  [data-ds-dark-theme] & {
+    background-color: transparent;
+  }
+}
+
+@media not all and (min-width: 440px) {
+  .picker {
+    max-width: 124px;
+  }
+}

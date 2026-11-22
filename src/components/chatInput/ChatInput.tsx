@@ -8,6 +8,13 @@ import {
   IconThinkOutline14,
 } from '../base/icons.js'
 import { setSearch, setThinking, useSettings } from '../../services/settings.js'
+import {
+  isDrawModel,
+  isTuziChatModel,
+  supportsServerTools,
+  useGateway,
+} from '../../services/api/gateway.js'
+import { getChatApiKey, hasDrawApiKey, hasLlmApiKey } from '../../services/api/credentials.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
 import {
@@ -28,6 +35,7 @@ import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
 import { DraftAttachments } from './DraftAttachments.js'
+import { ModelPicker } from './ModelPicker.js'
 import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
@@ -53,6 +61,17 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
+  const model = useSettings((state) => state.model)
+  // 选中 tu-zi 绘图模型时，输入框切换为绘图模式：不显示思考 / 搜索与附件
+  const drawing = useGateway((state) => state.drawModels.some((item) => item.id === model))
+  const tuziChat = useGateway((state) =>
+    state.llmModels.some((item) => item.id === model)
+  )
+  // 绘图与 TuZi 第三方模型都不走 DeepSeek 的思考/搜索/附件
+  const thirdParty = drawing || tuziChat
+  // deepseek-v4-pro 不支持服务端联网工具，搜索开关置灰
+  const toolCapable = supportsServerTools(model)
+  const searchEnabled = search && toolCapable
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
@@ -72,13 +91,20 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     const observer = new ResizeObserver(updateLabels)
     observer.observe(toggles)
     return () => observer.disconnect()
-  }, [t])
+  }, [t, thirdParty])
 
   const acceptFiles = (files: File[]) => {
-    if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
+    if (files.length === 0) {
       return
     }
-    const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '')
+    if (thirdParty) {
+      showToast({ key: drawing ? 'drawNoFiles' : 'tuziChatNoFiles', type: 'error' })
+      return
+    }
+    if (useChatStore.getState().importingHistory || !ensureApiKey()) {
+      return
+    }
+    const error = addDraftFiles(sessionId, files, getChatApiKey())
     if (error) {
       showToast(error)
     }
@@ -86,7 +112,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const retryFile = useCallback(
     (id: string) => {
       if (!useChatStore.getState().importingHistory && ensureApiKey()) {
-        retryDraftAttachment(sessionId, id, useSettings.getState().apiKey ?? '')
+        retryDraftAttachment(sessionId, id, getChatApiKey())
       }
     },
     [sessionId]
@@ -141,7 +167,29 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
+    const selected = useSettings.getState().model
+    if (isDrawModel(selected)) {
+      if (!hasDrawApiKey()) {
+        showToast({ key: 'drawKeyMissing', type: 'error' })
+        return
+      }
+      if (getDraft(sessionId).attachments.length > 0) {
+        showToast({ key: 'drawNoFiles', type: 'error' })
+        return
+      }
+    } else if (isTuziChatModel(selected)) {
+      if (!hasLlmApiKey()) {
+        showToast({ key: 'tuziKeyMissing', type: 'error' })
+        return
+      }
+      if (getDraft(sessionId).attachments.length > 0) {
+        showToast({ key: 'tuziChatNoFiles', type: 'error' })
+        return
+      }
+    } else if (!ensureApiKey()) {
+      return
+    }
+    if (!sendMessage(sessionId)) {
       return
     }
     stopReadAloud()
@@ -166,7 +214,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         <textarea
           ref={textareaRef}
           className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
-          placeholder={t('chatInputPlaceholderChat')}
+          placeholder={t(drawing ? 'drawInputPlaceholder' : 'chatInputPlaceholderChat')}
           rows={2}
           // 移动端不自动聚焦，避免一打开就弹出键盘
           autoFocus={!isMobile}
@@ -200,33 +248,37 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         </div>
       </div>
       <div className={styles.functionRow}>
-        {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
-        <div ref={togglesRef} className={styles.toggles}>
-          <Tooltip content={t('deactivatedThinkTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, thinking && styles.selected)}
-              aria-label={t('thinkingSwitch')}
-              aria-pressed={thinking}
-              onClick={() => setThinking(!thinking)}
-            >
-              <IconThinkOutline14 />
-              <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
-            </button>
-          </Tooltip>
-          <Tooltip content={t('deactivatedSearchTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, search && styles.selected)}
-              aria-label={t('search')}
-              aria-pressed={search}
-              onClick={() => setSearch(!search)}
-            >
-              <IconGlobeLanguageOutline14 />
-              <span className={styles.toggleLabel}>{t('search')}</span>
-            </button>
-          </Tooltip>
-        </div>
+        <ModelPicker />
+        {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方；绘图模式不需要 */}
+        {thirdParty ? null : (
+          <div ref={togglesRef} className={styles.toggles}>
+            <Tooltip content={t('deactivatedThinkTooltip')}>
+              <button
+                type="button"
+                className={clsx(styles.toggle, thinking && styles.selected)}
+                aria-label={t('thinkingSwitch')}
+                aria-pressed={thinking}
+                onClick={() => setThinking(!thinking)}
+              >
+                <IconThinkOutline14 />
+                <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
+              </button>
+            </Tooltip>
+            <Tooltip content={toolCapable ? t('deactivatedSearchTooltip') : t('searchUnavailableForModel')}>
+              <button
+                type="button"
+                className={clsx(styles.toggle, searchEnabled && styles.selected)}
+                aria-label={t('search')}
+                aria-pressed={searchEnabled}
+                disabled={!toolCapable}
+                onClick={() => setSearch(!search)}
+              >
+                <IconGlobeLanguageOutline14 />
+                <span className={styles.toggleLabel}>{t('search')}</span>
+              </button>
+            </Tooltip>
+          </div>
+        )}
         <div className={styles.right}>
           <VoiceButton
             status={voice.status}
@@ -241,14 +293,16 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
               }
             }}
           />
-          <IconButton
-            size="m"
-            tone="primary"
-            icon={<IconPaperclipOutline16 />}
-            tooltip={t('uploadFile')}
-            disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
-          />
+          {thirdParty ? null : (
+            <IconButton
+              size="m"
+              tone="primary"
+              icon={<IconPaperclipOutline16 />}
+              tooltip={t('uploadFile')}
+              disabled={importingHistory}
+              onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            />
+          )}
           <input
             ref={fileInputRef}
             type="file"

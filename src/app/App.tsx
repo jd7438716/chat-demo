@@ -15,6 +15,7 @@ import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureApiKey } from '../components/settings/settingsDialogState.js'
+import { initGateway } from '../services/api/gateway.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
@@ -69,8 +70,8 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key
-    ensureApiKey()
+    // 先探测本地服务（.env 里的 Key）；没有本地服务时才要求手动输入 API Key
+    void initGateway().then(ensureApiKey)
   }, [])
 
   return (

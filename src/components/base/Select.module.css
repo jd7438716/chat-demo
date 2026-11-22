@@ -98,3 +98,54 @@
     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
+
+/* 分组标题：绘图模型较多时按「对话 / 绘图」分组 */
+.group {
+  padding: 8px 10px 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-caption);
+  user-select: none;
+}
+
+/* 模型较多时的搜索框 */
+.search {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 2px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  outline: none;
+}
+
+.search::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.search:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.empty {
+  padding: 12px 10px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-caption);
+  text-align: center;
+}
+
+.optionDisabled {
+  color: var(--dsw-alias-label-caption);
+  cursor: default;
+}
+
+.optionDisabled:hover {
+  background: transparent;
+}

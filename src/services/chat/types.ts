@@ -1,7 +1,6 @@
 import type { TranslationMessage } from '../../i18n/index.js'
 import type { ApiErrorKind } from '../api/client.js'
 import type {
-  ChatModel,
   MessageUsage,
   ServerToolBlock,
   StopDetails,
@@ -64,8 +63,28 @@ export type TextPart = {
   isTemplate?: boolean
 }
 
+/** 绘图结果：图片原件保存在本地 files 表（id 即文件 ID），远端 URL 只作为下载失败时的兜底 */
+export type ImagePart = {
+  type: 'image'
+  /** IndexedDB files 表的主键；没有下载到原件时为空串 */
+  id: string
+  mimeType: string
+  prompt: string
+  model: string
+  revisedPrompt?: string
+  /** 未下载到原件时保留远端地址，刷新后可能已过期 */
+  url?: string
+  createdAt: number
+}
+
+/** 回复类型：chat 为流式对话，draw 为 tu-zi 文生图 */
+export type ReplyKind = 'chat' | 'draw'
+
+/** 对话提供方：DeepSeek 官方 Anthropic 兼容接口 / TuZi OpenAI 兼容接口 */
+export type ReplyProvider = 'deepseek' | 'tuzi'
+
 /** 服务端工具调用与结果块按协议原样保存；历史请求只回传 read_link 调用与结果 */
-export type ReplyBlock = ThinkingPart | TextPart | ServerToolBlock
+export type ReplyBlock = ThinkingPart | TextPart | ImagePart | ServerToolBlock
 
 /**
  * pending：已发出请求，还没收到事件；streaming：正在接收；
@@ -77,8 +96,12 @@ export type AssistantMessage = MessageBranch & {
   id: string
   role: 'assistant'
   createdAt: number
-  /** 未记录模型时为 null，续写使用当前默认模型。 */
-  model: ChatModel | null
+  /** 未记录模型时为 null，续写使用当前默认模型；绘图模型也是同一个字段。 */
+  model: string | null
+  /** 未记录时为 chat（兼容旧数据）。 */
+  kind?: ReplyKind
+  /** 未记录时为 deepseek（兼容旧数据）。 */
+  provider?: ReplyProvider
   /** 请求时是否开启深度思考 */
   thinking?: boolean
   /** 请求时是否声明 deepseek_web_search；关闭时仍声明 deepseek_read_url */

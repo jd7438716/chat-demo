@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ChatModel } from './api/types.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -7,9 +8,11 @@ export type Locale = 'zh-CN' | 'en-US'
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 本机设置，存 localStorage：API Key、模型、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
   apiKey: string | null
+  /** 当前选中的模型：DeepSeek 对话模型或 tu-zi 绘图模型 */
+  model: string
   locale: Locale
   themePreference: ThemePreference
   location: UserLocation | null
@@ -21,6 +24,7 @@ type Settings = {
 
 const KEYS = {
   apiKey: 'chat-demo:api-key',
+  model: 'chat-demo:model',
   locale: 'chat-demo:locale',
   location: 'chat-demo:location',
   themePreference: 'chat-demo:theme-preference',
@@ -87,8 +91,12 @@ const initialThemePreference = (): ThemePreference => {
 /** 未保存过时使用服务端默认音色 stella（海星） */
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
+/** 未保存过时使用 DeepSeek 默认对话模型 */
+const initialModel = (): ChatModel | string => read(KEYS.model) || 'deepseek-flash'
+
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
+  model: initialModel(),
   locale: initialLocale(),
   location: initialLocation(),
   themePreference: initialThemePreference(),
@@ -122,6 +130,11 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
 export const setApiKey = (apiKey: string | null) => {
   write(KEYS.apiKey, apiKey)
   useSettings.setState({ apiKey })
+}
+
+export const setModel = (model: string) => {
+  write(KEYS.model, model)
+  useSettings.setState({ model })
 }
 
 export const setThinking = (thinking: boolean) => {

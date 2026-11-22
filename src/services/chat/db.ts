@@ -38,7 +38,11 @@ const storedSummary = (session: Session): StoredSessionSummary => ({
   fileIds: [
     ...new Set(
       session.messages.flatMap((message) =>
-        message.role === 'user' ? message.files.map((file) => file.id) : []
+        message.role === 'user'
+          ? message.files.map((file) => file.id)
+          : message.blocks.flatMap((block) =>
+              block.type === 'image' && block.id ? [block.id] : []
+            )
       )
     ),
   ],

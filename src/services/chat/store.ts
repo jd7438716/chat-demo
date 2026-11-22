@@ -1,7 +1,17 @@
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
+import type { CreateMessageRequest } from '../api/types.js'
+import { DrawApiError, generateDrawImages } from '../api/draw.js'
+import { streamTuziChat as streamTuziChatCompletion, type TuziChatMessage } from '../api/llm.js'
+import { getChatApiKey } from '../api/credentials.js'
+import {
+  DEFAULT_CHAT_MODEL,
+  getModelKind,
+  getModelProvider,
+  resolveChatModel,
+  supportsServerTools,
+} from '../api/gateway.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import {
   cancelUpload,
@@ -25,6 +35,7 @@ import {
   applyEvent,
   canContinueReply,
   getContextRounds,
+  getReplyText,
   settleReply,
   toRequestMessages,
 } from './reply.js'
@@ -32,14 +43,17 @@ import {
   toSessionSummary,
   type AssistantMessage,
   type FileAttachment,
+  type ImagePart,
   type Message,
+  type ReplyKind,
+  type ReplyProvider,
   type Session,
   type SessionSummary,
   type UserMessage,
 } from './types.js'
 
-/** deepseek-flash 同时支持深度思考与图片输入 */
-const MODEL: ChatModel = 'deepseek-flash'
+/** 默认对话模型：deepseek-flash 同时支持深度思考与图片输入 */
+const MODEL = DEFAULT_CHAT_MODEL
 /** 所有生成请求统一携带的助手身份说明 */
 const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
@@ -259,17 +273,32 @@ export const bindChatPersistence = () => {
   }
 }
 
-/** 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。 */
-const createReply = (): AssistantMessage => {
-  const { thinking, search } = useSettings.getState()
+/**
+ * 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。
+ * 绘图回复不携带这些开关；model 明确传入时用于重新生成旧回答。
+ */
+const createReply = (
+  kind?: ReplyKind,
+  model?: string,
+  provider?: ReplyProvider
+): AssistantMessage => {
+  const { thinking, search, model: selected } = useSettings.getState()
+  const replyModel = model ?? selected
+  const replyKind = kind ?? getModelKind(replyModel)
+  const replyProvider =
+    replyKind === 'draw' ? undefined : provider ?? getModelProvider(replyModel)
+  // 只有 DeepSeek 官方对话走 Anthropic 兼容接口，支持思考 / 搜索 / 服务端标题
+  const officialChat = replyKind === 'chat' && replyProvider === 'deepseek'
   return {
     id: createId(),
     role: 'assistant',
     createdAt: Date.now(),
-    model: MODEL,
-    thinking,
-    search,
-    prefix: true,
+    model: officialChat ? resolveChatModel(replyModel) : replyModel,
+    kind: replyKind,
+    ...(replyProvider ? { provider: replyProvider } : {}),
+    thinking: officialChat ? thinking : false,
+    search: officialChat ? search : false,
+    prefix: officialChat,
     status: 'pending',
     blocks: [],
   }
@@ -609,6 +638,14 @@ export const sendMessage = (targetSessionId: string | null) => {
   const reply = createReply()
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
+    // 绘图与 deepseek-v4-pro 没有服务端标题生成，先用提问首行兜底
+    title:
+      session.title ||
+      (reply.kind === 'draw' ||
+      reply.provider === 'tuzi' ||
+      !supportsServerTools(reply.model)
+        ? fallbackTitle(text)
+        : ''),
     updatedAt: now,
   }))
   if (files.length > 0) {
@@ -619,7 +656,13 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   persist(sessionId)
   clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, { history, question })
+  if (reply.kind === 'draw') {
+    void streamDraw(sessionId, reply, question)
+  } else if (reply.provider === 'tuzi') {
+    void streamTuziChat(sessionId, reply, { history, question })
+  } else {
+    void streamReply(sessionId, reply, { history, question })
+  }
   return true
 }
 
@@ -636,17 +679,28 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   const index =
     messageId === undefined ? path.length - 1 : path.findIndex((m) => m.id === messageId)
   const question = path[index - 1]
-  if (question?.role !== 'user' || path[index]?.role !== 'assistant') {
+  const previousReply = path[index]
+  if (question?.role !== 'user' || previousReply?.role !== 'assistant') {
     return
   }
   const history = path.slice(0, index - 1)
-  const reply = createReply()
+  const reply = createReply(
+    previousReply.kind,
+    previousReply.model ?? undefined,
+    previousReply.provider
+  )
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, question.id, [reply]),
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history, question })
+  if (reply.kind === 'draw') {
+    void streamDraw(sessionId, reply, question)
+  } else if (reply.provider === 'tuzi') {
+    void streamTuziChat(sessionId, reply, { history, question })
+  } else {
+    void streamReply(sessionId, reply, { history, question })
+  }
 }
 
 /** 编辑提问后新增同父版本，保留原文件；旧问题的所有回答与后续对话仍可切回。 */
@@ -672,13 +726,23 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     files: previous.files,
     createdAt: Date.now(),
   }
-  const reply = createReply()
+  const nextReply = path[index + 1]
+  const reply =
+    nextReply?.role === 'assistant'
+      ? createReply(nextReply.kind, nextReply.model ?? undefined, nextReply.provider)
+      : createReply()
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history: path.slice(0, index), question })
+  if (reply.kind === 'draw') {
+    void streamDraw(sessionId, reply, question)
+  } else if (reply.provider === 'tuzi') {
+    void streamTuziChat(sessionId, reply, { history: path.slice(0, index), question })
+  } else {
+    void streamReply(sessionId, reply, { history: path.slice(0, index), question })
+  }
   return true
 }
 
@@ -708,6 +772,8 @@ export const continueReply = (sessionId: string, messageId: string) => {
   if (
     question?.role !== 'user' ||
     previous?.role !== 'assistant' ||
+    previous.kind === 'draw' ||
+    previous.provider === 'tuzi' ||
     previous.id !== messageId ||
     !canContinueReply(previous)
   ) {
@@ -832,7 +898,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
   request = refreshRequest(sessionId, request)
-  const apiKey = useSettings.getState().apiKey ?? ''
+  const apiKey = getChatApiKey()
   const serverIds = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   const aborted = new Promise<never>((_, reject) => {
@@ -985,7 +1051,8 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
  */
 const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
   const controller = new AbortController()
-  if (!getSession(sessionId)?.title) {
+  const toolCapable = supportsServerTools(initial.model)
+  if (!getSession(sessionId)?.title && toolCapable) {
     titleRequests.add(controller)
   }
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
@@ -1018,17 +1085,18 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.question,
           prepared.prefix,
           initial.thinking ?? false,
-          latestReminder
+          // deepseek-v4-pro 不支持 latest_reminder 快照
+          toolCapable ? latestReminder : undefined
         )
         const events = streamMessage(
-          useSettings.getState().apiKey ?? '',
+          getChatApiKey(),
           {
-            model: initial.model ?? MODEL,
+            model: resolveChatModel(initial.model ?? MODEL),
             system: SYSTEM_PROMPT,
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             safety_check: SAFETY_CHECK,
-            tools: serverTools(initial.search ?? false),
+            tools: toolCapable ? serverTools(initial.search ?? false) : [],
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },
           controller.signal
@@ -1107,6 +1175,186 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
+    updateReply(sessionId, reply)
+    set((state) => ({
+      streaming: Object.fromEntries(
+        Object.entries(state.streaming).filter(([id]) => id !== sessionId)
+      ),
+    }))
+    persist(sessionId)
+  }
+}
+
+
+/**
+ * TuZi 的 OpenAI 兼容对话：把历史里的文字拼成 messages，流式追加正文 / 思考块。
+ * 不走 DeepSeek 的 thinking/search/tools，也不支持附件。
+ */
+const streamTuziChat = async (
+  sessionId: string,
+  initial: AssistantMessage,
+  request: Request
+) => {
+  const controller = new AbortController()
+  set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
+  let reply = initial
+  let frame = 0
+  const flush = () => {
+    cancelAnimationFrame(frame)
+    frame = 0
+    updateReply(sessionId, reply)
+  }
+  const schedule = () => {
+    if (document.visibilityState === 'hidden') {
+      flush()
+    } else {
+      frame ||= requestAnimationFrame(flush)
+    }
+  }
+  streamFlushes.set(sessionId, flush)
+
+  try {
+    const question = request.question.content.trim()
+    if (!question) {
+      throw new Error('提问不能为空')
+    }
+    const messages: TuziChatMessage[] = []
+    for (const [user, previous] of getContextRounds(request.history)) {
+      const userText = user.content.trim()
+      if (!userText) {
+        continue
+      }
+      messages.push({ role: 'user', content: userText })
+      const text = getReplyText(previous)
+      if (text.trim()) {
+        messages.push({ role: 'assistant', content: text })
+      }
+    }
+    messages.push({ role: 'user', content: question })
+
+    await streamTuziChatCompletion({
+      model: initial.model ?? '',
+      messages,
+      signal: controller.signal,
+      onDelta: (delta) => {
+        const blocks = [...reply.blocks]
+        const last = blocks.at(-1)
+        if (delta.type === 'thinking') {
+          if (last?.type === 'thinking') {
+            blocks[blocks.length - 1] = { ...last, thinking: last.thinking + delta.text }
+          } else {
+            blocks.push({
+              type: 'thinking',
+              thinking: delta.text,
+              startedAt: Date.now(),
+            })
+          }
+        } else if (last?.type === 'text') {
+          blocks[blocks.length - 1] = { ...last, text: last.text + delta.text }
+        } else {
+          blocks.push({ type: 'text', text: delta.text })
+        }
+        reply = { ...reply, blocks }
+        schedule()
+      },
+    })
+    if (reply.blocks.length === 0) {
+      throw new Error('模型没有返回内容')
+    }
+    reply = settleReply(reply, 'done', Date.now())
+  } catch (error) {
+    if (controller.signal.aborted) {
+      reply = settleReply(reply, 'stopped', Date.now())
+    } else {
+      const detail = error instanceof Error ? error.message : String(error)
+      reply = settleReply(reply, 'error', Date.now(), {
+        kind: 'protocol',
+        message: detail,
+        localMessage: { key: 'tuziChatFailed', params: { message: detail } },
+      })
+    }
+  } finally {
+    streamFlushes.delete(sessionId)
+    cancelAnimationFrame(frame)
+    updateReply(sessionId, reply)
+    set((state) => ({
+      streaming: Object.fromEntries(
+        Object.entries(state.streaming).filter(([id]) => id !== sessionId)
+      ),
+    }))
+    persist(sessionId)
+  }
+}
+
+/** 会话标题兜底：取提问首行，过长时截断（绘图与不支持自动标题的模型使用） */
+const fallbackTitle = (prompt: string) => {
+  const line = prompt.replace(/\s+/g, ' ').trim()
+  return line.length > 24 ? `${line.slice(0, 24)}…` : line
+}
+
+/**
+ * 绘图：调用 tu-zi /v1/images/generations，把返回的图片存进本地 files 表，
+ * 再把图片块写入回复。图片不进入对话上下文。
+ */
+const streamDraw = async (
+  sessionId: string,
+  initial: AssistantMessage,
+  question: UserMessage
+) => {
+  const controller = new AbortController()
+  set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
+  let reply = initial
+  streamFlushes.set(sessionId, () => updateReply(sessionId, reply))
+
+  try {
+    const prompt = question.content.trim()
+    if (!prompt) {
+      throw new DrawApiError('提示词不能为空')
+    }
+    const images = await generateDrawImages({
+      model: initial.model ?? '',
+      prompt,
+      signal: controller.signal,
+    })
+    const files: db.StoredFile[] = []
+    const parts: ImagePart[] = images.map((image) => {
+      const id = createId()
+      if (image.blob) {
+        files.push({ id, blob: image.blob })
+      }
+      return {
+        type: 'image',
+        id: image.blob ? id : '',
+        mimeType: image.mimeType,
+        prompt,
+        model: initial.model ?? '',
+        ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
+        ...(image.blob ? {} : image.url ? { url: image.url } : {}),
+        createdAt: Date.now(),
+      }
+    })
+    if (files.length > 0) {
+      pendingFiles.set(sessionId, [...(pendingFiles.get(sessionId) ?? []), ...files])
+    }
+    reply = { ...reply, blocks: parts, status: 'done' }
+    updateSession(sessionId, (session) => ({
+      ...session,
+      title: session.title || fallbackTitle(prompt),
+      updatedAt: Date.now(),
+    }))
+  } catch (error) {
+    if (controller.signal.aborted) {
+      reply = settleReply(reply, 'stopped', Date.now())
+    } else {
+      const detail = error instanceof Error ? error.message : String(error)
+      reply = settleReply(reply, 'error', Date.now(), {
+        kind: 'protocol',
+        message: detail,
+        localMessage: { key: 'drawFailed', params: { message: detail } },
+      })
+    }
+  } finally {
+    streamFlushes.delete(sessionId)
     updateReply(sessionId, reply)
     set((state) => ({
       streaming: Object.fromEntries(

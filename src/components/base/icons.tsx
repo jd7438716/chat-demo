@@ -523,3 +523,19 @@ export const IconToastError16 = () => (
     />
   </svg>
 )
+
+
+/** 图片图标：画框 + 山峰与太阳，颜色跟随 currentColor */
+export const IconImageOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2" y="3.2" width="12" height="9.6" rx="1.6" stroke="currentColor" strokeWidth="1.2" />
+    <circle cx="5.9" cy="6.3" r="1.05" fill="currentColor" />
+    <path
+      d="m2.4 11.4 3.3-2.9 2.2 1.9 2.1-1.8 3.6 3.1"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+      strokeLinecap="round"
+    />
+  </svg>
+)

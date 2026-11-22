@@ -6,7 +6,7 @@ import { describeReply } from '../../services/chat/describe.js'
 import { canContinueReply } from '../../services/chat/reply.js'
 import { continueReply, regenerateReply } from '../../services/chat/store.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
-import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
+import type { AssistantMessage as AssistantMessageType, ImagePart } from '../../services/chat/types.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { IconButton } from '../base/IconButton.js'
 import { Button } from '../base/Button.js'
@@ -16,6 +16,7 @@ import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js
 import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
 import { ReplyArea } from './ReplyArea.js'
+import { DrawPlaceholder, ImageGallery } from './ImageGallery.js'
 import { useReplyView } from './useReplyView.js'
 import {
   BranchSwitcher,
@@ -54,7 +55,10 @@ export const AssistantMessage = memo(function AssistantMessage({
     .filter(Boolean)
     .join('\n\n')
   const copyText = responseText || notice?.text
-  const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
+  const drawing = message.kind === 'draw'
+  const images = message.blocks.filter((block): block is ImagePart => block.type === 'image')
+  const waiting =
+    !drawing && streaming && view.steps.length === 0 && !view.answer && !message.thinking
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={styles.message}>
@@ -66,6 +70,11 @@ export const AssistantMessage = memo(function AssistantMessage({
           hasResponse={!!responseText}
         />
       )}
+      {images.length > 0 ? (
+        <ImageGallery images={images} />
+      ) : drawing && (streaming || message.status === 'pending') ? (
+        <DrawPlaceholder />
+      ) : null}
       {answer ? (
         <Markdown
           className="ds-assistant-message-main-content"
