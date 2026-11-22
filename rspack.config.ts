@@ -82,7 +82,13 @@ export const createConfig = ({
     }),
     new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) }),
     new rspack.CopyRspackPlugin({
-      patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
+      patterns: [
+        { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },
+        // PWA 资源：manifest / service worker / 图标（源码在 pwa/，构建时平铺进 dist 根）
+        { from: path.resolve(root, 'pwa/manifest.webmanifest'), to: 'manifest.webmanifest', toType: 'file' },
+        { from: path.resolve(root, 'pwa/sw.js'), to: 'sw.js', toType: 'file' },
+        { from: path.resolve(root, 'pwa/icons'), to: 'icons', toType: 'dir' },
+      ],
     }),
   ],
   performance: { hints: false },
