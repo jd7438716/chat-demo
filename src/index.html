@@ -16,12 +16,58 @@
   <body>
     <div id="root"></div>
     <script>
-      // 注册 Service Worker：file:// 下跳过（浏览器不允许，且本站也支持直接开文件）
-      if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-        window.addEventListener('load', function () {
-          navigator.serviceWorker.register('sw.js').catch(function () {})
+      // Service Worker 注册 + 新版本自动生效。
+      // file:// 下跳过（浏览器不允许 SW，且本站也支持直接开文件）。
+      ;(function () {
+        if (!('serviceWorker' in navigator) || location.protocol === 'file:') return
+
+        var hadController = !!navigator.serviceWorker.controller
+        var reloading = false
+
+        function reloadOnce() {
+          if (reloading) return
+          reloading = true
+          location.reload()
+        }
+
+        // 后台标签直接刷（用户看不到，零打断）；前台则给个提示，避免打断正在输入的提问
+        function showUpdateHint() {
+          if (document.getElementById('sw-update-hint')) return
+          var el = document.createElement('button')
+          el.id = 'sw-update-hint'
+          el.type = 'button'
+          el.textContent = '有新版本，点击刷新'
+          el.style.cssText =
+            'position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:10px 16px;' +
+            'border:0;border-radius:999px;background:#4d6bfe;color:#fff;cursor:pointer;' +
+            'font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;' +
+            'box-shadow:0 4px 16px rgba(0,0,0,.22)'
+          el.addEventListener('click', reloadOnce)
+          document.body.appendChild(el)
+        }
+
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          // 首次安装也会触发 controllerchange，此时不该刷新
+          if (!hadController) return
+          if (document.visibilityState === 'hidden') reloadOnce()
+          else showUpdateHint()
         })
-      }
+
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('sw.js', { updateViaCache: 'none' })
+            .then(function (reg) {
+              // 浏览器默认只在导航时检查更新，长时间不关的标签页会一直停在旧版
+              setInterval(function () {
+                reg.update().catch(function () {})
+              }, 10 * 60 * 1000)
+              document.addEventListener('visibilitychange', function () {
+                if (document.visibilityState === 'visible') reg.update().catch(function () {})
+              })
+            })
+            .catch(function () {})
+        })
+      })()
     </script>
   </body>
 </html>
