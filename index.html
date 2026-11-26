@@ -1,0 +1,67 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffffff"><title>API 使用 demo</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icons/favicon-32.png" sizes="32x32"><link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="DeepSeek"><meta name="apple-mobile-web-app-status-bar-style" content="default"><style>
+      /*
+       * 首帧兜底：这段样式和下面的脚本都不依赖 main.js / main.css，
+       * 所以「HTML 到了」就能画出底色和骨架，不会先白一下再出内容。
+       */
+      html {
+        background: rgb(255, 255, 255);
+      }
+      html[data-boot-theme='dark'] {
+        background: rgb(21, 21, 23);
+      }
+      #root {
+        min-height: 100%;
+      }
+      .boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        color: #4d6bfe;
+        font:
+          600 15px/1.4 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+        letter-spacing: 0.02em;
+      }
+      .boot-bar {
+        width: 96px;
+        height: 3px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(77, 107, 254, 0.18);
+      }
+      .boot-bar::after {
+        content: '';
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: inherit;
+        background: currentColor;
+        animation: boot-slide 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes boot-slide {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-bar::after {
+          width: 100%;
+          animation: none;
+        }
+      }
+    </style><script>!function(){try{var e=localStorage.getItem("chat-demo:theme-preference"),t="dark"===e||"light"!==e&&window.matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.dataset.bootTheme=t?"dark":"light",document.documentElement.style.colorScheme=t?"dark":"light"}catch(e){}}()</script><meta content="0.1.3" name="application-version"><script defer src="static/js/main.22c0b4e0.js"></script><link href="static/css/main.d6d50385.css" rel="stylesheet"></head><body><div id="root">
+      <div class="boot" role="status" aria-live="polite">
+        <div>DeepSeek</div>
+        <div class="boot-bar"></div>
+      </div>
+    </div>
+    <script>!function(){if(window.setTimeout(function(){var e=document.querySelector(".boot");if(e){var t=document.createElement("div");t.style.cssText="font-size:12px;font-weight:400;opacity:.7;letter-spacing:0",t.textContent="加载有点慢，检查网络后再刷新一次",e.appendChild(t)}},8e3),"serviceWorker"in navigator&&"file:"!==location.protocol){var e=!!navigator.serviceWorker.controller,t=!1;navigator.serviceWorker.addEventListener("controllerchange",function(){e&&("hidden"===document.visibilityState?n():function(){if(!document.getElementById("sw-update-hint")){var e=document.createElement("button");e.id="sw-update-hint",e.type="button",e.textContent="有新版本，点击刷新",e.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:10px 16px;border:0;border-radius:999px;background:#4d6bfe;color:#fff;cursor:pointer;font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.22)',e.addEventListener("click",n),document.body.appendChild(e)}}())}),navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(function(e){setInterval(function(){e.update().catch(function(){})},6e5),document.addEventListener("visibilitychange",function(){"visible"===document.visibilityState&&e.update().catch(function(){})})}).catch(function(){})}function n(){t||(t=!0,location.reload())}}()</script></body></html>
