@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 
-const dev = process.env.NODE_ENV !== 'production'
+// 构建还是开发服务器：显式 NODE_ENV 优先，否则看 rspack 子命令（Windows 下也能用）
+const dev = process.env.NODE_ENV
+  ? process.env.NODE_ENV !== 'production'
+  : !process.argv.includes('build')
 const targets = ['chrome >= 105', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
 const root = path.dirname(fileURLToPath(import.meta.url))
 const { version } = JSON.parse(
@@ -84,9 +87,10 @@ export const createConfig = ({
     new rspack.CopyRspackPlugin({
       patterns: [
         { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },
-        // PWA 资源：manifest / service worker / 图标（源码在 pwa/，构建时平铺进 dist 根）
+        // PWA 资源：manifest / 图标（源码在 pwa/，构建时平铺进 dist 根）
+        // sw.js 不在这里拷贝：文件名带 contenthash，只有构建末尾才知道，
+        // 由 pwa/build-sw.mjs 读 dist/index.html 生成（见 package.json 的 build）
         { from: path.resolve(root, 'pwa/manifest.webmanifest'), to: 'manifest.webmanifest', toType: 'file' },
-        { from: path.resolve(root, 'pwa/sw.js'), to: 'sw.js', toType: 'file' },
         { from: path.resolve(root, 'pwa/icons'), to: 'icons', toType: 'dir' },
       ],
     }),
