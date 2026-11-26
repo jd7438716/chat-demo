@@ -11,8 +11,17 @@ export const isServerMode = (): boolean => useGateway.getState().status === 'ser
 export const getChatApiKey = (): string =>
   isServerMode() ? '' : useSettings.getState().apiKey || ''
 
-export const hasChatApiKey = (): boolean =>
-  isServerMode() ? useGateway.getState().hasChatKey : !!useSettings.getState().apiKey
+export const hasChatApiKey = (): boolean => {
+  const { status, hasChatKey } = useGateway.getState()
+  if (status === 'server') {
+    return hasChatKey
+  }
+  // 连不上服务端时不要退回浏览器里的旧 Key：那会把服务端模式误判成静态页面
+  if (status === 'unreachable') {
+    return false
+  }
+  return !!useSettings.getState().apiKey
+}
 
 /** 绘图 Key：只由服务端读取 .env 的 TuZiKey */
 export const hasDrawApiKey = (): boolean =>

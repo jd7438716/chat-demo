@@ -306,7 +306,9 @@ const TuziModelsSetting = () => {
   const description =
     gatewayStatus === 'client'
       ? t('settingsDrawModelsStatic')
-      : !hasDrawKey && !hasLlmKey
+      : gatewayStatus === 'unreachable'
+        ? t('settingsServerUnreachable')
+        : !hasDrawKey && !hasLlmKey
         ? t('settingsDrawModelsUnavailable')
         : modelsStatus === 'loading'
           ? t('settingsDrawModelsLoading')

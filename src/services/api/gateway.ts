@@ -21,11 +21,14 @@ export const CHAT_MODELS: ChatModelOption[] = [
 
 export type TuziModelOption = TuziModel & { label: string }
 
-export type GatewayStatus = 'pending' | 'server' | 'client'
+export type GatewayStatus = 'pending' | 'server' | 'client' | 'unreachable'
 export type ModelsStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 type GatewayState = {
-  /** pending：还没探测完 /api/config；server：服务端代理可用；client：纯静态页面，手动 Key 直连 */
+  /**
+   * pending：还没探测完 /api/config；server：服务端代理可用；client：纯静态页面，手动 Key 直连；
+   * unreachable：有服务端但这次没连上（离线 / 超时 / 网关 5xx）——这时不能当成静态页面去要 Key
+   */
   status: GatewayStatus
   hasChatKey: boolean
   /** TuZiKey 是否存在（绘图） */
@@ -176,42 +179,78 @@ export const normalizeSelectedModel = () => {
   }
 }
 
-const detectServer = async (): Promise<void> => {
+/**
+ * 探测 `/api/config`。冷启动要重新握到 Cloudflare 的 TLS（实测首包 6s+），超时给足；
+ * 纯静态页面回 404/HTML，和「有服务端但这次没连上」必须分开：后者不能弹「输入 API Key」。
+ */
+const CONFIG_TIMEOUT = 8000
+
+type ProbeResult =
+  | { kind: 'server'; hasChatKey: boolean; hasDrawKey: boolean; hasLlmKey: boolean }
+  | { kind: 'client' }
+  | { kind: 'unreachable' }
+
+const probeServer = async (): Promise<ProbeResult> => {
   try {
     const response = await fetch('/api/config', {
       cache: 'no-store',
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(CONFIG_TIMEOUT),
     })
+    if (response.status >= 500) {
+      return { kind: 'unreachable' }
+    }
     const contentType = response.headers.get('content-type') ?? ''
     if (!response.ok || !contentType.includes('application/json')) {
-      throw new Error('not a local server')
+      return { kind: 'client' }
     }
     const data: unknown = await response.json()
     const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}
     if (record.mode !== 'server') {
-      throw new Error('not a local server')
+      return { kind: 'client' }
     }
     const chat = record.chat as Record<string, unknown> | undefined
     const draw = record.draw as Record<string, unknown> | undefined
     const llm = record.llm as Record<string, unknown> | undefined
-    const hasChatKey = chat?.hasKey === true
-    const hasDrawKey = draw?.hasKey === true
-    const hasLlmKey = llm?.hasKey === true
-    useGateway.setState({ status: 'server', hasChatKey, hasDrawKey, hasLlmKey })
-    if (hasDrawKey || hasLlmKey) {
-      const cached = readModelCache()
-      if (cached.drawModels.length > 0 || cached.llmModels.length > 0) {
-        useGateway.setState({
-          drawModels: cached.drawModels,
-          llmModels: cached.llmModels,
-          modelsStatus: 'ready',
-        })
-      }
-      void refreshTuziModels()
-    } else {
-      normalizeSelectedModel()
+    return {
+      kind: 'server',
+      hasChatKey: chat?.hasKey === true,
+      hasDrawKey: draw?.hasKey === true,
+      hasLlmKey: llm?.hasKey === true,
     }
   } catch {
+    return { kind: 'unreachable' }
+  }
+}
+
+/** 连不上服务端时的自动重试退避（毫秒）：网络恢复后不用刷新页面也能回到服务端模式 */
+const RETRY_DELAYS = [2000, 5000, 10000, 20000]
+let retryTimer = 0
+let retryIndex = 0
+
+const scheduleRetry = (): void => {
+  if (retryTimer !== 0 || retryIndex >= RETRY_DELAYS.length) {
+    return
+  }
+  const delay = RETRY_DELAYS[retryIndex] ?? 0
+  retryIndex += 1
+  retryTimer = window.setTimeout(() => {
+    retryTimer = 0
+    void probeServer().then(applyProbe)
+  }, delay)
+}
+
+const applyProbe = (result: ProbeResult): void => {
+  if (result.kind === 'unreachable') {
+    useGateway.setState({
+      status: 'unreachable',
+      hasChatKey: false,
+      hasDrawKey: false,
+      hasLlmKey: false,
+    })
+    scheduleRetry()
+    return
+  }
+  if (result.kind === 'client') {
     useGateway.setState({
       status: 'client',
       hasChatKey: false,
@@ -219,13 +258,83 @@ const detectServer = async (): Promise<void> => {
       hasLlmKey: false,
     })
     normalizeSelectedModel()
+    return
+  }
+  useGateway.setState({
+    status: 'server',
+    hasChatKey: result.hasChatKey,
+    hasDrawKey: result.hasDrawKey,
+    hasLlmKey: result.hasLlmKey,
+  })
+  if (result.hasDrawKey || result.hasLlmKey) {
+    const cached = readModelCache()
+    if (cached.drawModels.length > 0 || cached.llmModels.length > 0) {
+      useGateway.setState({
+        drawModels: cached.drawModels,
+        llmModels: cached.llmModels,
+        modelsStatus: 'ready',
+      })
+    }
+    void refreshTuziModels()
+  } else {
+    normalizeSelectedModel()
+  }
+}
+
+/**
+ * 服务端把配置内联在 index.html 里（`window.__CHAT_CONFIG__`），有值就先用它上线，
+ * 省掉首屏那次 `/api/config` 往返；拿不到（纯静态托管、老外壳）再回退到探测。
+ */
+const readInlineConfig = (): ProbeResult | null => {
+  const raw = typeof window === 'undefined' ? undefined : window.__CHAT_CONFIG__
+  if (typeof raw !== 'object' || raw === null) {
+    return null
+  }
+  const record = raw as Record<string, unknown>
+  if (record.mode === 'static') {
+    return { kind: 'client' }
+  }
+  if (record.mode !== 'server') {
+    return null
+  }
+  const chat = record.chat as Record<string, unknown> | undefined
+  const draw = record.draw as Record<string, unknown> | undefined
+  const llm = record.llm as Record<string, unknown> | undefined
+  return {
+    kind: 'server',
+    hasChatKey: chat?.hasKey === true,
+    hasDrawKey: draw?.hasKey === true,
+    hasLlmKey: llm?.hasKey === true,
   }
 }
 
 /** 启动时探测服务端；结果只初始化一次 */
 export const initGateway = (): Promise<void> => {
-  initTask ??= detectServer()
+  initTask ??= (async () => {
+    const inline = readInlineConfig()
+    if (!inline) {
+      applyProbe(await probeServer())
+      return
+    }
+    applyProbe(inline)
+    // 外壳可能来自 Service Worker 缓存（内联配置会过时）：后台再对一次真值。
+    // 只采纳确定的结果，连不上时保留内联值，避免网络抖动又弹出「输入 Key」。
+    void probeServer().then((result) => {
+      if (result.kind !== 'unreachable') {
+        applyProbe(result)
+      }
+    })
+  })()
   return initTask
+}
+
+/** 手动重试：清掉退避计时，立刻重新探测（发送前的提示、设置页都会用到） */
+export const retryGatewayProbe = async (): Promise<void> => {
+  window.clearTimeout(retryTimer)
+  retryTimer = 0
+  retryIndex = 0
+  useGateway.setState({ status: 'pending' })
+  applyProbe(await probeServer())
 }
 
 /** deepseek-v4-pro 不支持服务端联网工具与自动标题；请求时要省略 tools/title */

@@ -198,6 +198,10 @@ export const en = {
   drawImageLost: 'Image is missing',
   apiKeyFromEnv: 'Loaded from .env by the server proxy; no manual input needed',
   apiKeyServerMissing: 'ApiKey is not configured in the server .env; edit it and restart the service',
+  apiKeyServerUnreachable:
+    'Cannot reach the server right now (the key lives in .env behind the proxy). Retrying automatically; reloading later also works.',
+  serverConnecting: 'Connecting to the server, please try again in a moment',
+  settingsServerUnreachable: 'The server is unreachable, so keys from .env cannot be read right now',
   settingsDrawModels: 'Image models',
   settingsTuziModels: 'TuZi models',
   settingsTuziModelsReady: '{draw} image models and {llm} chat models loaded',

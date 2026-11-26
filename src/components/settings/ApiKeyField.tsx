@@ -15,16 +15,19 @@ export const useApiKeyEditor = () => {
   const storedApiKey = useSettings((state) => state.apiKey)
   // 服务端代理模式下 Key 只在 .env 里，页面不再输入
   const serverMode = status === 'server'
+  // 连不上服务端时，手上没有 .env 状态可显示，也不该让用户手填 Key
+  const serverUnreachable = status === 'unreachable'
   const [editing, setEditing] = useState(false)
   const form = useApiKeyForm(() => setEditing(false))
   return {
     apiKey: storedApiKey,
     serverMode,
     serverHasKey,
+    serverUnreachable,
     editing,
     setEditing,
     form,
-    showInput: !serverMode && (!storedApiKey || editing),
+    showInput: !serverMode && !serverUnreachable && (!storedApiKey || editing),
   }
 }
 
@@ -34,7 +37,8 @@ type ApiKeyEditor = ReturnType<typeof useApiKeyEditor>
 export const ApiKeyField = ({ editor }: { editor: ApiKeyEditor }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
-  const { apiKey, serverMode, serverHasKey, editing, setEditing, form, showInput } = editor
+  const { apiKey, serverMode, serverHasKey, serverUnreachable, editing, setEditing, form, showInput } =
+    editor
 
   return (
     <div className={styles.cell}>
@@ -44,6 +48,8 @@ export const ApiKeyField = ({ editor }: { editor: ApiKeyEditor }) => {
           <div className={styles.description}>
             {t(serverHasKey ? 'apiKeyFromEnv' : 'apiKeyServerMissing')}
           </div>
+        ) : serverUnreachable ? (
+          <div className={styles.description}>{t('apiKeyServerUnreachable')}</div>
         ) : apiKey && !editing ? (
           <div className={styles.apiKeySaved}>
             <span className={styles.apiKeyMask}>{'*'.repeat(apiKey.length)}</span>

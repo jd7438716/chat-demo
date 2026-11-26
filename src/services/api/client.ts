@@ -14,7 +14,11 @@ import type {
 /** 构建期 API 地址，默认 https://api.deepseek.com；静态页面使用它直连 */
 export const API_ORIGIN = __API_ORIGIN__
 /** 服务端代理模式：请求同源接口，由本地/容器服务注入 .env 的 Key */
-export const isServerMode = () => useGateway.getState().status === 'server'
+export const isServerMode = () => {
+  const { status } = useGateway.getState()
+  // 暂时连不上服务端时仍按代理处理：请求打到同源接口会明确失败，而不是拿空 Key 去直连
+  return status === 'server' || status === 'unreachable'
+}
 /** 当前请求应使用的 API 前缀 */
 export const getApiOrigin = () => (isServerMode() ? '' : API_ORIGIN)
 /** Anthropic 兼容接口的前缀 */
